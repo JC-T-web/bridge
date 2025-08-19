@@ -14,7 +14,7 @@
 #endif
 
 /*日志区域所用页数*/ 
-#define BLOCK_NUM					6
+#define BLOCK_NUM					8
 /*日志区域的起始地址*/ 
 #define LFS_INTER_FLASH_START_ADDR  0x08032000UL 
 /*日志区域空间*/ 
@@ -212,7 +212,7 @@ const struct lfs_config inter_cfg =
 	.lookahead_size = 16,
 	.block_cycles = 500,
 
-	.file_max = 2048, 
+	.file_max = 4*2048, 
 	.read_buffer = inter_read_buffer,
 	.prog_buffer = inter_prog_buffer,
 	.lookahead_buffer = inter_lookahead_buffer,
@@ -263,13 +263,14 @@ lfs_size_t get_file_size(const char *filename)
 #define LOG_FILENAME 			"datalog.txt"
 #define LOG_OFFSET_ATTR_ID 		0x01
 static lfs_off_t g_write_offset = 0;
-#define LOG_FILE_MAX_SIZE		4*2048
+
 /**
  * 使用LittleFS存储日志到内部Flash
  * @param log_message 日志消息字符串
  * @param message_len 消息长度
  * @return 成功时返回写入的字节长度 ，-1表示失败
  */ 
+
 int lfs_store_log_internal(const void *log_message, int message_len)
 {
 
@@ -282,38 +283,30 @@ int lfs_store_log_internal(const void *log_message, int message_len)
 	{
         .buffer = file_write_buffer, 
     };
+	
 	lfs_file_t file;
-
-	if (g_write_offset + message_len > LOG_FILE_MAX_SIZE) 
+	
+	if(g_write_offset + message_len > lfs_inter_flash.file_max) 
 	{
         g_write_offset = 0; 
-        printf("Log file wrapped around. Seeking to beginning.\n");
     }
-
-    int err = lfs_file_opencfg(&lfs_inter_flash, &file,LOG_FILENAME,LFS_O_WRONLY | LFS_O_CREAT , &fcfg);
-	//int err = lfs_file_opencfg(&lfs_inter_flash, &file, "Exception_log.txt",LFS_O_WRONLY | LFS_O_CREAT , &fcfg);
+    int err = lfs_file_opencfg(&lfs_inter_flash, &file, LOG_FILENAME,LFS_O_WRONLY | LFS_O_CREAT , &fcfg);
     if (err < 0) 
 	{
         lfs_format(&lfs_inter_flash, &inter_cfg);
         lfs_mount(&lfs_inter_flash, &inter_cfg);
-        err = lfs_file_opencfg(&lfs_inter_flash, &file,LOG_FILENAME,LFS_O_WRONLY | LFS_O_CREAT, &fcfg);
-		//err = lfs_file_opencfg(&lfs_inter_flash, &file, "Exception_log.txt",LFS_O_WRONLY | LFS_O_CREAT , &fcfg);
-        if (err < 0)
-		{
-			return -1;
-		}			
+        lfs_file_opencfg(&lfs_inter_flash, &file, LOG_FILENAME,LFS_O_WRONLY | LFS_O_CREAT , &fcfg);		
     }
-	err = lfs_file_seek(&lfs_inter_flash, &file, g_write_offset, LFS_SEEK_SET);
-    if (err < 0) {
-        printf("Error: log_append failed to seek. Code: %d\n", err);
-        return err;
-    }
+	lfs_file_seek(&lfs_inter_flash, &file, g_write_offset, LFS_SEEK_SET);
     lfs_ssize_t written = lfs_file_write(&lfs_inter_flash, &file,log_message, message_len);
-	g_write_offset += written;
-    lfs_setattr(&lfs_inter_flash, LOG_FILENAME, LOG_OFFSET_ATTR_ID, &g_write_offset, sizeof(g_write_offset));
-	
+	if(written > 0) 
+	{
+		g_write_offset+=written;
+	}
     lfs_file_close(&lfs_inter_flash, &file);
 
+	lfs_setattr(&lfs_inter_flash, LOG_FILENAME, LOG_OFFSET_ATTR_ID, &g_write_offset, sizeof(g_write_offset));
+	
     return written;
 }
 
@@ -438,13 +431,15 @@ void lfs_RW_test()
 {
 	char log_buffer[64];
 	int message_len;
+	static int end = 0;
 	if (g.user_key_button.clicked == ON) 
 	{
 		key_down_num++;
+		end += 50;
 		g.user_key_button.clicked = OFF; 
 		always_Print(0, ("key down %d\r\n",key_down_num));
 		always_Print(0, ("before write file size = %d\r\n",get_file_size(LOG_FILENAME)));
-		for(int i= (key_down_num-1)*50;i<100;i++)
+		for(int i=end-50;i<end;i++)
 		{
 			message_len = sprintf(log_buffer, "this is #%3d write,hello world/", i);
 			lfs_store_log_internal(log_buffer,message_len);
@@ -452,10 +447,22 @@ void lfs_RW_test()
 		always_Print(0, ("after write file size = %d\r\n",get_file_size(LOG_FILENAME)));
 		always_Print(0, ("\r\n"));
 		log_lfs_printf();
+//		struct lfs_file_config fcfg = 
+//		{
+//			.buffer = file_read_buffer, 
+//		};
+//		lfs_file_t file;
+
+//		int err = lfs_file_opencfg(&lfs_inter_flash, &file,LOG_FILENAME,LFS_O_RDWR | LFS_O_CREAT , &fcfg);
+//		//显式地将文件指针移动到文件末尾
+//		lfs_soff_t end_pos = lfs_file_seek(&lfs_inter_flash, &file, 0, LFS_SEEK_END);
+//  		always_Print(0, ("File end position from seek: %d\r\n", (int)end_pos));
+//		// 此时再调用 lfs_file_tell，它将返回当前指针的位置，也就是文件末尾
+//		lfs_soff_t current_pos = lfs_file_tell(&lfs_inter_flash, &file);
+//		always_Print(0, ("File end position from tell: %d\r\n", (int)current_pos));
+//		lfs_file_close(&lfs_inter_flash, &file);
 	}
 }
-
-
 
 void log_lfs_init(void)
 {
@@ -483,6 +490,7 @@ void log_lfs_init(void)
 	}
 	lfs_file_opencfg(&lfs_inter_flash, &file,LOG_FILENAME,LFS_O_WRONLY | LFS_O_CREAT , &fcfg);
 	int err = lfs_getattr(&lfs_inter_flash, LOG_FILENAME, LOG_OFFSET_ATTR_ID, &g_write_offset, sizeof(g_write_offset));
+	printf("g_write_offset = %d\n",g_write_offset);
 	if (err >= 0) {
         // --- 成功获取属性 ---
         // err 返回的是读取到的字节数，我们最好验证一下
